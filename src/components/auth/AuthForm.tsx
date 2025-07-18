@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface AuthFormProps {
   onAuth: (username: string) => void;
@@ -13,9 +14,10 @@ export const AuthForm = ({ onAuth }: AuthFormProps) => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!username.trim() || !password.trim()) {
@@ -36,36 +38,72 @@ export const AuthForm = ({ onAuth }: AuthFormProps) => {
       return;
     }
 
-    const users = JSON.parse(localStorage.getItem("discord_users") || "{}");
-    
-    if (isLogin) {
-      if (!users[username] || users[username] !== password) {
-        toast({
-          title: "Error",
-          description: "Invalid username or password",
-          variant: "destructive"
-        });
-        return;
-      }
-    } else {
-      if (users[username]) {
-        toast({
-          title: "Error",
-          description: "Username already exists",
-          variant: "destructive"
-        });
-        return;
-      }
-      users[username] = password;
-      localStorage.setItem("discord_users", JSON.stringify(users));
-      toast({
-        title: "Success",
-        description: "Account created successfully!"
-      });
-    }
+    setLoading(true);
 
-    localStorage.setItem("discord_current_user", username);
-    onAuth(username);
+    try {
+      if (isLogin) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: `${username}@discord.local`,
+          password: password,
+        });
+
+        if (error) {
+          toast({
+            title: "Error",
+            description: "Invalid username or password",
+            variant: "destructive"
+          });
+          return;
+        }
+
+        if (data.user) {
+          onAuth(username);
+        }
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: `${username}@discord.local`,
+          password: password,
+          options: {
+            data: {
+              username: username
+            }
+          }
+        });
+
+        if (error) {
+          if (error.message.includes("already registered")) {
+            toast({
+              title: "Error",
+              description: "Username already exists",
+              variant: "destructive"
+            });
+          } else {
+            toast({
+              title: "Error",
+              description: error.message,
+              variant: "destructive"
+            });
+          }
+          return;
+        }
+
+        if (data.user) {
+          toast({
+            title: "Success",
+            description: "Account created successfully!"
+          });
+          onAuth(username);
+        }
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: isLogin ? "Login failed" : "Registration failed",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -88,6 +126,7 @@ export const AuthForm = ({ onAuth }: AuthFormProps) => {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="bg-input border-border"
+                disabled={loading}
               />
             </div>
             <div className="space-y-2">
@@ -97,6 +136,7 @@ export const AuthForm = ({ onAuth }: AuthFormProps) => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="bg-input border-border"
+                disabled={loading}
               />
             </div>
             {!isLogin && (
@@ -107,17 +147,23 @@ export const AuthForm = ({ onAuth }: AuthFormProps) => {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   className="bg-input border-border"
+                  disabled={loading}
                 />
               </div>
             )}
-            <Button type="submit" className="w-full bg-gradient-primary hover:opacity-90">
-              {isLogin ? "Sign In" : "Sign Up"}
+            <Button 
+              type="submit" 
+              className="w-full bg-gradient-primary hover:opacity-90"
+              disabled={loading}
+            >
+              {loading ? (isLogin ? "Signing In..." : "Signing Up...") : (isLogin ? "Sign In" : "Sign Up")}
             </Button>
             <Button 
               type="button" 
               variant="ghost" 
               className="w-full" 
               onClick={() => setIsLogin(!isLogin)}
+              disabled={loading}
             >
               {isLogin ? "Need an account? Sign up" : "Already have an account? Sign in"}
             </Button>

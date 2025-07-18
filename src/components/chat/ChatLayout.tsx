@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { ChatSidebar } from "./ChatSidebar";
 import { ChatArea } from "./ChatArea";
+import { supabase } from "@/integrations/supabase/client";
 
 interface ChatLayoutProps {
   currentUser: string;
@@ -27,13 +28,18 @@ export const ChatLayout = ({ currentUser, onLogout }: ChatLayoutProps) => {
     setIsDarkMode(!isDarkMode);
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    onLogout();
+  };
+
   return (
     <div className="h-screen bg-background text-foreground flex">
       <ChatSidebar
         currentUser={currentUser}
         selectedUser={selectedUser}
         onSelectUser={setSelectedUser}
-        onLogout={onLogout}
+        onLogout={handleLogout}
         isDarkMode={isDarkMode}
         onToggleTheme={handleToggleTheme}
       />

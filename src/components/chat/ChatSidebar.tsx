@@ -6,6 +6,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Users, Plus, LogOut, Moon, Sun } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface ChatSidebarProps {
   currentUser: string;
@@ -30,25 +31,46 @@ export const ChatSidebar = ({
   const { toast } = useToast();
 
   useEffect(() => {
-    const allUsers = JSON.parse(localStorage.getItem("discord_users") || "{}");
-    const userList = Object.keys(allUsers).filter(user => user !== currentUser);
-    setUsers(userList);
+    loadUsers();
   }, [currentUser]);
 
-  const handleAddUser = () => {
+  const loadUsers = async () => {
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) return;
+
+      const { data: contacts, error } = await supabase
+        .from('contacts')
+        .select('contact_id')
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Error loading contacts:', error);
+        return;
+      }
+
+      if (!contacts || contacts.length === 0) {
+        setUsers([]);
+        return;
+      }
+
+      // Get usernames for all contacts
+      const contactIds = contacts.map(contact => contact.contact_id);
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('username')
+        .in('user_id', contactIds);
+
+      const usernames = profiles?.map(profile => profile.username).filter(Boolean) || [];
+      setUsers(usernames);
+    } catch (error) {
+      console.error('Error loading users:', error);
+    }
+  };
+
+  const handleAddUser = async () => {
     if (!newUserSearch.trim()) return;
     
-    const allUsers = JSON.parse(localStorage.getItem("discord_users") || "{}");
-    
-    if (!allUsers[newUserSearch]) {
-      toast({
-        title: "Error",
-        description: "User not found",
-        variant: "destructive"
-      });
-      return;
-    }
-
     if (newUserSearch === currentUser) {
       toast({
         title: "Error", 
@@ -58,22 +80,73 @@ export const ChatSidebar = ({
       return;
     }
 
-    if (!users.includes(newUserSearch)) {
-      setUsers([...users, newUserSearch]);
+    if (users.includes(newUserSearch)) {
+      toast({
+        title: "Error",
+        description: "User already in your contacts",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) return;
+
+      // Check if the username exists
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('user_id')
+        .eq('username', newUserSearch)
+        .single();
+
+      if (profileError || !profile) {
+        toast({
+          title: "Error",
+          description: "User not found",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Add to contacts
+      const { error } = await supabase
+        .from('contacts')
+        .insert({
+          user_id: user.id,
+          contact_id: profile.user_id
+        });
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to add contact",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const updatedUsers = [...users, newUserSearch];
+      setUsers(updatedUsers);
+      setNewUserSearch("");
+      setShowAddUser(false);
       toast({
         title: "Success",
         description: `Added ${newUserSearch} to your contacts`
       });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to add user",
+        variant: "destructive"
+      });
     }
-    
-    setNewUserSearch("");
-    setShowAddUser(false);
   };
 
   const getUnreadCount = (username: string) => {
-    const messages = JSON.parse(localStorage.getItem(`discord_messages_${currentUser}_${username}`) || "[]");
-    const lastRead = localStorage.getItem(`discord_lastread_${currentUser}_${username}`) || "0";
-    return messages.filter((msg: any) => msg.timestamp > parseInt(lastRead) && msg.sender !== currentUser).length;
+    // Simplified for this implementation
+    // In a real app, you'd track read status properly
+    return 0;
   };
 
   return (

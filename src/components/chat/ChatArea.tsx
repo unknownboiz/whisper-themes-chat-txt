@@ -4,12 +4,13 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Send } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Message {
   id: string;
   sender: string;
   content: string;
-  timestamp: number;
+  created_at: string;
 }
 
 interface ChatAreaProps {
@@ -23,52 +24,119 @@ export const ChatArea = ({ currentUser, selectedUser }: ChatAreaProps) => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const chatKey = `discord_messages_${[currentUser, selectedUser].sort().join('_')}`;
-
   useEffect(() => {
-    const loadMessages = () => {
-      const savedMessages = localStorage.getItem(chatKey);
-      if (savedMessages) {
-        setMessages(JSON.parse(savedMessages));
-      } else {
-        setMessages([]);
-      }
-    };
-
     loadMessages();
-    
-    // Mark messages as read
-    localStorage.setItem(`discord_lastread_${currentUser}_${selectedUser}`, Date.now().toString());
-  }, [currentUser, selectedUser, chatKey]);
+  }, [currentUser, selectedUser]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const saveMessages = (updatedMessages: Message[]) => {
-    localStorage.setItem(chatKey, JSON.stringify(updatedMessages));
-    
-    // Also save to individual txt-like format for backup
-    const txtContent = updatedMessages.map(msg => 
-      `[${new Date(msg.timestamp).toLocaleString()}] ${msg.sender}: ${msg.content}`
-    ).join('\n');
-    localStorage.setItem(`${chatKey}_txt`, txtContent);
+  const loadMessages = async () => {
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) return;
+
+      // Get the recipient's user_id
+      const { data: recipientProfile, error: recipientError } = await supabase
+        .from('profiles')
+        .select('user_id')
+        .eq('username', selectedUser)
+        .single();
+
+      if (recipientError || !recipientProfile) return;
+
+      // Load messages between current user and selected user
+      const { data: messagesData, error } = await supabase
+        .from('messages')
+        .select(`
+          id,
+          content,
+          created_at,
+          sender_id,
+          recipient_id
+        `)
+        .or(`and(sender_id.eq.${user.id},recipient_id.eq.${recipientProfile.user_id}),and(sender_id.eq.${recipientProfile.user_id},recipient_id.eq.${user.id})`)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error loading messages:', error);
+        return;
+      }
+
+      // Get all user profiles for sender names
+      const senderIds = [...new Set(messagesData?.map(msg => msg.sender_id) || [])];
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('user_id, username')
+        .in('user_id', senderIds);
+
+      const profileMap = profiles?.reduce((acc, profile) => {
+        acc[profile.user_id] = profile.username;
+        return acc;
+      }, {} as Record<string, string>) || {};
+
+      const formattedMessages: Message[] = messagesData?.map(msg => ({
+        id: msg.id,
+        sender: profileMap[msg.sender_id] || 'Unknown',
+        content: msg.content,
+        created_at: msg.created_at
+      })) || [];
+
+      setMessages(formattedMessages);
+    } catch (error) {
+      console.error('Error loading messages:', error);
+    }
   };
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!newMessage.trim()) return;
 
-    const message: Message = {
-      id: Date.now().toString(),
-      sender: currentUser,
-      content: newMessage.trim(),
-      timestamp: Date.now()
-    };
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) return;
 
-    const updatedMessages = [...messages, message];
-    setMessages(updatedMessages);
-    saveMessages(updatedMessages);
-    setNewMessage("");
+      // Get the recipient's user_id
+      const { data: recipientProfile, error: recipientError } = await supabase
+        .from('profiles')
+        .select('user_id')
+        .eq('username', selectedUser)
+        .single();
+
+      if (recipientError || !recipientProfile) {
+        console.error('Error finding recipient:', recipientError);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          sender_id: user.id,
+          recipient_id: recipientProfile.user_id,
+          content: newMessage.trim()
+        })
+        .select('id, content, created_at, sender_id')
+        .single();
+
+      if (error) {
+        console.error('Error sending message:', error);
+        return;
+      }
+
+      if (data) {
+        const newMsg: Message = {
+          id: data.id,
+          sender: currentUser,
+          content: data.content,
+          created_at: data.created_at
+        };
+
+        setMessages(prev => [...prev, newMsg]);
+        setNewMessage("");
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -78,15 +146,15 @@ export const ChatArea = ({ currentUser, selectedUser }: ChatAreaProps) => {
     }
   };
 
-  const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleTimeString([], { 
+  const formatTime = (dateString: string) => {
+    return new Date(dateString).toLocaleTimeString([], { 
       hour: '2-digit', 
       minute: '2-digit' 
     });
   };
 
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
@@ -102,8 +170,8 @@ export const ChatArea = ({ currentUser, selectedUser }: ChatAreaProps) => {
 
   const shouldShowDateSeparator = (currentMsg: Message, prevMsg?: Message) => {
     if (!prevMsg) return true;
-    const currentDate = new Date(currentMsg.timestamp).toDateString();
-    const prevDate = new Date(prevMsg.timestamp).toDateString();
+    const currentDate = new Date(currentMsg.created_at).toDateString();
+    const prevDate = new Date(prevMsg.created_at).toDateString();
     return currentDate !== prevDate;
   };
 
@@ -140,8 +208,8 @@ export const ChatArea = ({ currentUser, selectedUser }: ChatAreaProps) => {
                 <div key={message.id} className="animate-message-in">
                   {showDateSeparator && (
                     <div className="flex items-center justify-center my-4">
-                      <div className="px-3 py-1 bg-muted rounded-full text-xs text-muted-foreground">
-                        {formatDate(message.timestamp)}
+                     <div className="px-3 py-1 bg-muted rounded-full text-xs text-muted-foreground">
+                        {formatDate(message.created_at)}
                       </div>
                     </div>
                   )}
@@ -165,7 +233,7 @@ export const ChatArea = ({ currentUser, selectedUser }: ChatAreaProps) => {
                           {message.sender}
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {formatTime(message.timestamp)}
+                          {formatTime(message.created_at)}
                         </span>
                       </div>
                       
