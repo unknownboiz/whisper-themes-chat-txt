@@ -1,14 +1,31 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useState, useEffect } from "react";
+import { AuthForm } from "@/components/auth/AuthForm";
+import { ChatLayout } from "@/components/chat/ChatLayout";
 
 const Index = () => {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
-    </div>
-  );
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem("discord_current_user");
+    if (savedUser) {
+      setCurrentUser(savedUser);
+    }
+  }, []);
+
+  const handleAuth = (username: string) => {
+    setCurrentUser(username);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("discord_current_user");
+    setCurrentUser(null);
+  };
+
+  if (!currentUser) {
+    return <AuthForm onAuth={handleAuth} />;
+  }
+
+  return <ChatLayout currentUser={currentUser} onLogout={handleLogout} />;
 };
 
 export default Index;
